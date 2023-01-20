@@ -1,61 +1,21 @@
 import argparse
 import os
 import gpxpy
-from gpxpy.gpx import GPXTrackPoint
-import gpxpy.geo as geo
 import logging
-import datetime
 import math
 from copy import deepcopy
 from PIL import Image, ImageDraw
-import typing
+from typing import cast
 import random
+import time
 
-from run import Run, Section
+from section import Section, project_web_mercator
 
 logging.basicConfig(level="DEBUG")
 logger = logging.getLogger(__name__)
 
 DEFAULT_RUN_PATH = "/mnt/c/Users/joby/Documents/Runs/"
 DEFAULT_RUN_PREFIX = "megameter"
-
-
-def draw_sections(sections: typing.List[Section], i_width=500, padding=20):
-    lower_bound = deepcopy(sections[0].bounds[0])
-    upper_bound = deepcopy(sections[0].bounds[1])
-
-    for section in sections:
-        if section.bounds[1].x > upper_bound.x:
-            upper_bound.x = section.bounds[1].x
-        if section.bounds[1].y > upper_bound.y:
-            upper_bound.y = section.bounds[1].y
-        if section.bounds[0].x < lower_bound.x:
-            lower_bound.x = section.bounds[0].x
-        if section.bounds[0].y < lower_bound.y:
-            lower_bound.y = section.bounds[0].y
-
-    print(upper_bound)
-    print(lower_bound)
-    width = upper_bound.x - lower_bound.x
-    height = upper_bound.y - lower_bound.y
-    i_height = int(i_width * (height / width))
-    print(f"width = {width:.2f} m, height = {height:.2f} m")
-    print(f"width = {i_width} m, height = {i_height} m")
-
-    img = Image.new("RGB", (i_width + (padding * 2), i_height + (padding * 2)), "white")
-    draw = ImageDraw.Draw(img)
-
-    for section in sections:
-        colour = (random.randint(0,255), random.randint(0,255), random.randint(0,255))
-        for point in section.points:
-            c = (
-                int(((point.position.x - lower_bound.x) / width) * i_width) + padding,
-                i_height
-                - (int(((point.position.y - lower_bound.y) / height) * i_height)) + padding,
-            )
-            print(c)
-            draw.point(c, colour)
-    img.save("out/test.png")
 
 
 def main(args):
@@ -69,76 +29,79 @@ def main(args):
     )
     logger.debug(f"Found {len(run_files)} runs with prefix '{args.run_prefix}'")
 
-    sections = []
+    sections: list[Section] = []
 
-    for run_path in run_files:
-        run = Run.from_gpx_file_path(run_path)
-        sections += run.sections
-
-    draw_sections(sections)
-    return
-    img = Image.new("RGB", (3000, 3000), "white")
-    for p in run.sections[0].points:
-        draw.ellipse(
-            (
-                ((int(p.position[0]) + 1500), (int(p.position[1]) + 2000)),
-                ((int(p.position[0]) + 1500) + 10, (int(p.position[1]) + 2000) + 10),
-            ),
-            (0, 0, 0),
-        )
-
-    total_distance = 0
-    num_points = 0
-    for path in run_files:
-        with open(path, "r") as run_file:
-            gpx = gpxpy.parse(run_file)
-            points = gpx.tracks[0].segments[0].points
-            distance = 0
-            last_point = points[0]
-            for point in points[1:]:
-                distance += last_point.distance_2d(point)
-                last_point = point
-            print(
-                f"[{points[0].time.astimezone().strftime('%y-%m-%d %-I:%M %p')} "
-                f"- {gpx.tracks[0].name}] {distance / 1000:.2f} km "
-                f"(from {len(points)} points)"
+    for run_file in run_files:
+        with open(run_file, "r") as file_obj:
+            g = gpxpy.parse(file_obj)
+        points = g.tracks[0].segments[0].points
+        section_id = 0
+        while points:
+            section, points = Section.from_gpx_track(
+                points,
+                f"{cast(str, g.tracks[0].name)}.{section_id}",
+                min_spacing=0.0,
+                max_speed=20.0,
+                max_idle=30.0,
             )
-            total_distance += distance
-            num_points += len(points)
+            sections.append(section)
+            section_id += 1
 
-    print(f"Total distance: {total_distance / 1000:.2f} km (from {num_points} points)")
+    bounds = deepcopy(sections[0].bounds)
 
+    for section in sections:
+        bounds.expand(section.bounds)
 
-def process_run(filename: str):
-    with open(filename, "r") as run_file:
-        gpx = gpxpy.parse(run_file)
-    tracks = gpx.tracks
-
-    logger.debug(
-        f"Run file {os.path.basename(filename)} contains "
-        f"{len(tracks)} track{'s' if len(tracks) - 1 else ''}"
+    x_max, y_max = project_web_mercator(bounds.lat_max, bounds.long_max)
+    x_min, y_min = project_web_mercator(bounds.lat_min, bounds.long_min)
+    x_range, y_range = (x_max - x_min, y_max - y_min)
+    logger.info(
+        f"Real image area: {x_range/1000:.1f}km x {y_range/1000:.1f}km ({(x_range/1000)*(y_range/1000):.1f}km^2)"
     )
 
-    for t_idx, track in enumerate(tracks):
-        segments = track.segments
-        logger.debug(
-            f"Track {t_idx} contains "
-            f"{len(segments)} segment{'s' if len(segments) - 1 else ''}"
-        )
+    i_width = 2000
+    i_height = int(i_width * (y_range / x_range))
 
-        for s_idx, segment in enumerate(segments):
-            points = segment.points
-            logger.debug(
-                f"Segment {s_idx} contains "
-                f"{len(points)} point{'s' if len(points) - 1 else ''}"
+    padding = 60
+    canvas_width, canvas_height = i_width - (2 * padding), i_height - (2 * padding)
+
+    line_width = 20
+    pt_offset = int(line_width / 2)
+
+    logger.info(f"Image pixel area: {canvas_width}px x {canvas_height}px")
+
+    img = Image.new("RGB", (i_width, i_height), "white")
+    draw = ImageDraw.ImageDraw(img, "RGBA")
+
+    for section in sections:
+        colour = (
+            random.randint(0, 255),
+            random.randint(0, 255),
+            random.randint(0, 255),
+            20,
+        )
+        for point in section.points:
+            pt_x_m, pt_y_m = point.project()
+            pt_x_px, pt_y_px = (
+                (math.floor(((pt_x_m - x_min) / x_range) * canvas_width)) + padding,
+                (
+                    (-1 * math.floor(((pt_y_m - y_min) / y_range) * canvas_height))
+                    + canvas_height
+                )
+                + padding,
             )
-            # When going through the points, we want to identify these areas:
-            #   - still section: position does not change much over time (so
-            #     that we can determine a "moving time", and to discard points
-            #     that are in the same spot)
-            #   - paused section: jump in distance from one point to the next
-            #     (so the distance between pause and resume points does not
-            #      count towards total distance)
+            draw.ellipse(
+                (
+                    (pt_x_px - pt_offset, pt_y_px - pt_offset),
+                    (pt_x_px + pt_offset, pt_y_px + pt_offset),
+                ),
+                colour,
+            )
+    img.save("out/new.png")
+    print("here")
+
+
+# def draw_section(draw: ImageDraw.ImageDraw, section: Section):
 
 
 if __name__ == "__main__":
