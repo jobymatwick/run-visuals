@@ -11,7 +11,7 @@ import time
 
 from section import Section, project_web_mercator
 
-logging.basicConfig(level="DEBUG")
+logging.basicConfig(level="INFO")
 logger = logging.getLogger(__name__)
 
 DEFAULT_RUN_PATH = "/mnt/c/Users/joby/Documents/Runs/"
@@ -52,56 +52,108 @@ def main(args):
     for section in sections:
         bounds.expand(section.bounds)
 
-    x_max, y_max = project_web_mercator(bounds.lat_max, bounds.long_max)
-    x_min, y_min = project_web_mercator(bounds.lat_min, bounds.long_min)
-    x_range, y_range = (x_max - x_min, y_max - y_min)
+    projection_max = project_web_mercator(bounds.lat_max, bounds.long_max)
+    projection_min = project_web_mercator(bounds.lat_min, bounds.long_min)
+    projection_range = (
+        projection_max[0] - projection_min[0],
+        projection_max[1] - projection_min[1],
+    )
     logger.info(
-        f"Real image area: {x_range/1000:.1f}km x {y_range/1000:.1f}km ({(x_range/1000)*(y_range/1000):.1f}km^2)"
+        f"Real image area: "
+        f"{projection_range[0]/1000:.1f} km x {projection_range[1]/1000:.1f} km"
+        f" ({(projection_range[0]/1000)*(projection_range[1]/1000):.1f} km^2)"
     )
 
-    i_width = 2000
-    i_height = int(i_width * (y_range / x_range))
+    i_width = 1200
+    padding = (35, 35)
+    stroke = 4
+    opacity = 80
 
-    padding = 60
-    canvas_width, canvas_height = i_width - (2 * padding), i_height - (2 * padding)
+    i_height = int(i_width * (projection_range[1] / projection_range[0]))
+    canvas_size = i_width - (2 * padding[0]), i_height - (2 * padding[1])
 
-    line_width = 20
+    logger.info(f"Image canvas area: {canvas_size[0]} px x {canvas_size[1]} px")
+    logger.info(f"Scale: {projection_range[0] / canvas_size[0]:.1f} m/px")
+
+    frames = [Image.new("RGB", (i_width, i_height), "white")]
+
+    print("  -> Rendering frames /", end="", flush=True)
+    spin = "/-\\|"
+    colours = [(50,150,77), (155,209,198), (58,87,90), (192,225,92), (144,50,53), (16,237,220), (152,154,202), (73,56,142), (251,172,246), (152,103,246), (56,226,120), (207,123,93), (255,28,93), (250,206,117)]
+
+    for i, section in enumerate(sections):
+        active_frame = frames[-1].copy()
+        draw = ImageDraw.ImageDraw(active_frame, "RGBA")
+        draw_section(
+            draw,
+            section,
+            projection_min,
+            projection_range,
+            canvas_size,
+            padding,
+            tuple(list(colours[i % len(colours)]) + [opacity]),
+            stroke,
+        )
+        frames.append(active_frame)
+        print(f"\b{spin[i % len(spin)]}", end="", flush=True)
+    print("\r" + " " * 80 + "\r", end="", flush=True)
+
+    logger.info("Saving GIF")
+    frames[0].save(
+        "out/animated.gif",
+        save_all=True,
+        append_images=frames[1:],
+        duration=[500] * (len(frames) - 1) + [5000],
+        optimize=True,
+        loop=0,
+    )
+    logger.info(
+        f"Output image size: "
+        f"{os.stat('out/animated.gif').st_size / 1024 / 1024:.2f} MB"
+    )
+
+
+def draw_section(
+    draw: ImageDraw.ImageDraw,
+    section: Section,
+    projection_min: tuple[float, float],
+    projection_range: tuple[float, float],
+    canvas_size: tuple[int, int],
+    canvas_offset: tuple[int, int],
+    colour: tuple[int, ...],
+    line_width: float,
+):
     pt_offset = int(line_width / 2)
 
-    logger.info(f"Image pixel area: {canvas_width}px x {canvas_height}px")
-
-    img = Image.new("RGB", (i_width, i_height), "white")
-    draw = ImageDraw.ImageDraw(img, "RGBA")
-
-    for section in sections:
-        colour = (
-            random.randint(0, 255),
-            random.randint(0, 255),
-            random.randint(0, 255),
-            20,
-        )
-        for point in section.points:
-            pt_x_m, pt_y_m = point.project()
-            pt_x_px, pt_y_px = (
-                (math.floor(((pt_x_m - x_min) / x_range) * canvas_width)) + padding,
-                (
-                    (-1 * math.floor(((pt_y_m - y_min) / y_range) * canvas_height))
-                    + canvas_height
+    for point in section.points:
+        pt_x_m, pt_y_m = point.project()
+        pt_x_px, pt_y_px = (
+            (
+                math.floor(
+                    ((pt_x_m - projection_min[0]) / projection_range[0])
+                    * canvas_size[0]
                 )
-                + padding,
             )
-            draw.ellipse(
+            + canvas_offset[0],
+            (
                 (
-                    (pt_x_px - pt_offset, pt_y_px - pt_offset),
-                    (pt_x_px + pt_offset, pt_y_px + pt_offset),
-                ),
-                colour,
+                    -1
+                    * math.floor(
+                        ((pt_y_m - projection_min[1]) / projection_range[1])
+                        * canvas_size[1]
+                    )
+                )
+                + canvas_size[1]
             )
-    img.save("out/new.png")
-    print("here")
-
-
-# def draw_section(draw: ImageDraw.ImageDraw, section: Section):
+            + canvas_offset[1],
+        )
+        draw.ellipse(
+            (
+                (pt_x_px - pt_offset, pt_y_px - pt_offset),
+                (pt_x_px + pt_offset, pt_y_px + pt_offset),
+            ),
+            colour,
+        )
 
 
 if __name__ == "__main__":
