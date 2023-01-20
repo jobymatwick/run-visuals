@@ -1,13 +1,11 @@
 import argparse
-import os
+from copy import deepcopy
 import gpxpy
 import logging
 import math
-from copy import deepcopy
+import os
 from PIL import Image, ImageDraw
 from typing import cast
-import random
-import time
 
 from section import Section, project_web_mercator
 
@@ -79,7 +77,22 @@ def main(args):
 
     print("  -> Rendering frames /", end="", flush=True)
     spin = "/-\\|"
-    colours = [(50,150,77), (155,209,198), (58,87,90), (192,225,92), (144,50,53), (16,237,220), (152,154,202), (73,56,142), (251,172,246), (152,103,246), (56,226,120), (207,123,93), (255,28,93), (250,206,117)]
+    colours = [
+        (50, 150, 77),
+        (155, 209, 198),
+        (58, 87, 90),
+        (192, 225, 92),
+        (144, 50, 53),
+        (16, 237, 220),
+        (152, 154, 202),
+        (73, 56, 142),
+        (251, 172, 246),
+        (152, 103, 246),
+        (56, 226, 120),
+        (207, 123, 93),
+        (255, 28, 93),
+        (250, 206, 117),
+    ]
 
     for i, section in enumerate(sections):
         active_frame = frames[-1].copy()
